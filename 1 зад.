@@ -1,0 +1,301 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <thread>
+#include <future>
+#include <algorithm>
+#include <limits>
+
+const int BOARD_SIZE = 8;
+
+enum Piece { EMPTY, WHITE, BLACK, WHITE_KING, BLACK_KING };
+
+struct Position {
+    int row, col;
+};
+
+struct Move {
+    Position from;
+    Position to;
+    std::vector<Position> captures; // Для хранения позиций взятых шашек
+};
+
+class Board {
+public:
+    Board();
+    void display();
+    bool is_valid_move(const Move& move, Piece player);
+    void make_move(const Move& move);
+    std::vector<Move> get_all_moves(Piece player);
+    Piece check_winner();
+    bool is_capture_available(Piece player);
+
+private:
+    Piece board[BOARD_SIZE][BOARD_SIZE];
+    void initialize_board();
+    bool is_within_bounds(int row, int col);
+    bool can_capture(Position pos, Piece player);
+    void promote_if_possible(Position pos);
+};
+
+Board::Board() {
+    initialize_board();
+}
+
+void Board::initialize_board() {
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            if ((i + j) % 2 == 1) {
+                if (i < 3) board[i][j] = BLACK;
+                else if (i > 4) board[i][j] = WHITE;
+                else board[i][j] = EMPTY;
+            } else {
+                board[i][j] = EMPTY;
+            }
+        }
+    }
+}
+
+void Board::display() {
+    std::cout << "  A B C D E F G H\n";
+    std::cout << " -----------------\n";
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        std::cout << i + 1 << "|";
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            switch (board[i][j]) {
+                case WHITE: std::cout << "W "; break;
+                case BLACK: std::cout << "B "; break;
+                case WHITE_KING: std::cout << "X "; break;
+                case BLACK_KING: std::cout << "Y "; break;
+                default: std::cout << "  "; break;
+            }
+        }
+        std::cout << "\n";
+    }
+}
+
+bool Board::is_within_bounds(int row, int col) {
+    return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+}
+
+bool Board::is_valid_move(const Move& move, Piece player) {
+    if (!is_within_bounds(move.from.row, move.from.col) || !is_within_bounds(move.to.row, move.to.col)) return false;
+    
+    Piece moving_piece = board[move.from.row][move.from.col];
+    if (moving_piece == EMPTY || (moving_piece != player && moving_piece != (player == WHITE ? WHITE_KING : BLACK_KING))) return false;
+    
+    int row_diff = move.to.row - move.from.row;
+    int col_diff = move.to.col - move.from.col;
+
+    if (board[move.to.row][move.to.col] != EMPTY) return false;
+
+    // Проверка обычных ходов
+    if (moving_piece == WHITE && row_diff == -1 && abs(col_diff) == 1) return true;
+    if (moving_piece == BLACK && row_diff == 1 && abs(col_diff) == 1) return true;
+
+    // Проверка дамочных ходов
+    if ((moving_piece == WHITE_KING || moving_piece == BLACK_KING) && abs(row_diff) == abs(col_diff)) return true;
+
+    // Проверка взятий
+    if (abs(row_diff) == 2 && abs(col_diff) == 2) {
+        int mid_row = (move.from.row + move.to.row) / 2;
+        int mid_col = (move.from.col + move.to.col) / 2;
+        Piece mid_piece = board[mid_row][mid_col];
+        if (mid_piece != EMPTY && (mid_piece != player && mid_piece != (player == WHITE ? WHITE_KING : BLACK_KING))) return true;
+    }
+
+    return false;
+}
+
+void Board::make_move(const Move& move) {
+    Piece moving_piece = board[move.from.row][move.from.col];
+    board[move.from.row][move.from.col] = EMPTY;
+    board[move.to.row][move.to.col] = moving_piece;
+
+    // Проверка на взятие
+    if (abs(move.to.row - move.from.row) == 2) {
+        int mid_row = (move.from.row + move.to.row) / 2;
+        int mid_col = (move.from.col + move.to.col) / 2;
+        board[mid_row][mid_col] = EMPTY;
+    }
+
+    promote_if_possible(move.to);
+}
+
+void Board::promote_if_possible(Position pos) {
+    if (board[pos.row][pos.col] == WHITE && pos.row == 0) board[pos.row][pos.col] = WHITE_KING;
+    if (board[pos.row][pos.col] == BLACK && pos.row == BOARD_SIZE - 1) board[pos.row][pos.col] = BLACK_KING;
+}
+
+std::vector<Move> Board::get_all_moves(Piece player) {
+    std::vector<Move> moves;
+    bool capture_available = is_capture_available(player);
+
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            if (board[i][j] == player || board[i][j] == (player == WHITE ? WHITE_KING : BLACK_KING)) {
+                std::vector<Position> directions = {{-1, -1}, {-1, 1}, {1, -1}, {1, 1}};
+
+                for (auto dir : directions) {
+                    int new_row = i + dir.row;
+                    int new_col = j + dir.col;
+                    
+                    Move move = {{i, j}, {new_row, new_col}};
+                    if (is_valid_move(move, player) && !capture_available) moves.push_back(move);
+
+                    // Проверка взятий
+                    Move capture_move = {{i, j}, {i + 2 * dir.row, j + 2 * dir.col}};
+                    if (is_valid_move(capture_move, player)) moves.push_back(capture_move);
+                }
+            }
+        }
+    }
+    return moves;
+}
+
+bool Board::is_capture_available(Piece player) {
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            if (can_capture({i, j}, player)) return true;
+        }
+    }
+    return false;
+}
+
+bool Board::can_capture(Position pos, Piece player) {
+    std::vector<Position> directions = {{-1, -1}, {-1, 1}, {1, -1}, {1, 1}};
+    for (auto dir : directions) {
+        int mid_row = pos.row + dir.row;
+        int mid_col = pos.col + dir.col;
+        int end_row = pos.row + 2 * dir.row;
+        int end_col = pos.col + 2 * dir.col;
+
+        if (is_within_bounds(mid_row, mid_col) && is_within_bounds(end_row, end_col)) {
+            Piece mid_piece = board[mid_row][mid_col];
+            if (mid_piece != EMPTY && (mid_piece != player && mid_piece != (player == WHITE ? WHITE_KING : BLACK_KING)) && board[end_row][end_col] == EMPTY) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+Piece Board::check_winner() {
+    bool white_exists = false, black_exists = false;
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            if (board[i][j] == WHITE || board[i][j] == WHITE_KING) white_exists = true;
+            if (board[i][j] == BLACK || board[i][j] == BLACK_KING) black_exists = true;
+        }
+    }
+    if (!white_exists) return BLACK;
+    if (!black_exists) return WHITE;
+    return EMPTY;
+}
+
+int evaluate_board(const Board& board) {
+    // Простая оценочная функция: количество шашек и дамок
+    int score = 0;
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            switch (board.board[i][j]) {
+                case WHITE: score += 1; break;
+                case WHITE_KING: score += 3; break;
+                case BLACK: score -= 1; break;
+                case BLACK_KING: score -= 3; break;
+                default: break;
+            }
+        }
+    }
+    return score;
+}
+
+Move minimax(Board board, int depth, Piece ai_player, bool maximizingPlayer) {
+    if (depth == 0 || board.check_winner() != EMPTY) {
+        return { {-1, -1}, {-1, -1}, {} };
+    }
+
+    std::vector<Move> possible_moves = board.get_all_moves(ai_player);
+    Move best_move;
+    int best_value = maximizingPlayer ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
+
+    std::vector<std::future<int>> futures;
+
+    for (const auto& move : possible_moves) {
+        futures.push_back(std::async(std::launch::async, [&]() {
+            Board new_board = board;
+            new_board.make_move(move);
+            int value = evaluate_board(new_board);
+            return value;
+        }));
+    }
+
+    for (size_t i = 0; i < possible_moves.size(); ++i) {
+        int value = futures[i].get();
+
+        if (maximizingPlayer && value > best_value) {
+            best_value = value;
+            best_move = possible_moves[i];
+        } else if (!maximizingPlayer && value < best_value) {
+            best_value = value;
+            best_move = possible_moves[i];
+        }
+    }
+
+    return best_move;
+}
+
+int main() {
+    Board board;
+    char player_choice;
+    
+    std::cout << "Выберите цвет (W - белые, B - черные): ";
+    std::cin >> player_choice;
+
+    Piece player = (player_choice == 'W' || player_choice == 'w') ? WHITE : BLACK;
+    Piece ai = (player == WHITE) ? BLACK : WHITE;
+
+    if (player == BLACK) {
+        Move ai_move = minimax(board, 3, ai, true);
+        board.make_move(ai_move);
+    }
+
+    board.display();
+
+    while (true) {
+        std::string user_input;
+        std::cout << "Введите ход (например A3 B4): ";
+        std::cin >> user_input;
+
+        if (user_input.length() != 5 || user_input[2] != ' ') {
+            std::cout << "Некорректный формат ввода. Попробуйте снова.\n";
+            continue;
+        }
+
+        Move user_move = {{user_input[1] - '1', user_input[0] - 'A'}, {user_input[4] - '1', user_input[3] - 'A'}};
+
+        if (!board.is_valid_move(user_move, player)) {
+            std::cout << "Некорректный ход. Попробуйте снова.\n";
+            continue;
+        }
+
+        board.make_move(user_move);
+        board.display();
+
+        if (board.check_winner() != EMPTY) {
+            std::cout << (board.check_winner() == player ? "Вы выиграли!" : "Вы проиграли.") << "\n";
+            break;
+        }
+
+        Move ai_move = minimax(board, 3, ai, true);
+        board.make_move(ai_move);
+        board.display();
+
+        if (board.check_winner() != EMPTY) {
+            std::cout << (board.check_winner() == player ? "Вы выиграли!" : "Вы проиграли.") << "\n";
+            break;
+        }
+    }
+
+    return 0;
+}
